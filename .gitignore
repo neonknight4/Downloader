@@ -1,0 +1,11 @@
+target/
+downloads/
+*.class
+*.jar
+*.war
+*.ear
+*.iml
+.idea/
+nbproject/private/
+build/
+dist/
