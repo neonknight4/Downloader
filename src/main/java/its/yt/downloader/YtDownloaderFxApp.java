@@ -16,6 +16,7 @@ import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
 import java.util.stream.Stream;
 
 public class YtDownloaderFxApp extends Application {
@@ -126,45 +127,46 @@ public class YtDownloaderFxApp extends Application {
 
         List<String> lines = List.of(text.split("\\R")); // \R = any line break
 
+        // Faza 1: parsiranje
+        List<OblastJob> jobs = new ArrayList<>();
         String currentOblast = null;
         List<String> currentUrls = new ArrayList<>();
 
-        // ovde skupljamo summary-je za sve oblasti
-        List<OblastSummary> allSummaries = new ArrayList<>();
-
         for (String rawLine : lines) {
-            if (stopRequested) {
-                break;
-            }
-
             String line = rawLine.trim();
-
             if (line.isEmpty()) {
                 continue;
             }
-
             if (isOblastHeader(line)) {
-                // ako imamo prethodnu oblast, završi je
-                if (currentOblast != null) {
-                    OblastSummary s = downloadOblastMp3(currentOblast, currentUrls);
-                    allSummaries.add(s);
+                if (currentOblast != null && !currentUrls.isEmpty()) {
+                    jobs.add(new OblastJob(currentOblast, new ArrayList<>(currentUrls)));
                 }
-
-                // započni novu oblast
                 currentOblast = line;
                 currentUrls = new ArrayList<>();
                 continue;
             }
-
-            // url linije
             if (line.startsWith("http://") || line.startsWith("https://")) {
                 currentUrls.add(line);
             }
         }
+        if (currentOblast != null && !currentUrls.isEmpty()) {
+            jobs.add(new OblastJob(currentOblast, currentUrls));
+        }
 
-        // poslednja oblast (ako postoji)
-        if (!stopRequested && currentOblast != null) {
-            OblastSummary s = downloadOblastMp3(currentOblast, currentUrls);
+        // Faza 2: pitaj start index za oblasti < 8 pesama (pre skidanja)
+        for (OblastJob job : jobs) {
+            if (job.urls.size() < 8) {
+                job.startIndex = askStartIndex(job.name, job.urls.size());
+            }
+        }
+
+        // Faza 3: skidanje
+        List<OblastSummary> allSummaries = new ArrayList<>();
+        for (OblastJob job : jobs) {
+            if (stopRequested) {
+                break;
+            }
+            OblastSummary s = downloadOblastMp3(job.name, job.urls, job.startIndex);
             allSummaries.add(s);
         }
 
@@ -197,16 +199,11 @@ public class YtDownloaderFxApp extends Application {
         return line.matches("\\d+\\.oblast");
     }
 
-    private OblastSummary downloadOblastMp3(String oblastName, List<String> urls) throws Exception {
+    private OblastSummary downloadOblastMp3(String oblastName, List<String> urls, int startIndex) throws Exception {
 
         OblastSummary summary = new OblastSummary(oblastName);
 
         if (stopRequested) {
-            return summary;
-        }
-
-        if (urls == null || urls.isEmpty()) {
-            log("Skipping " + oblastName + " (no URLs)");
             return summary;
         }
 
@@ -225,6 +222,7 @@ public class YtDownloaderFxApp extends Application {
         log("=======================================");
         log("Oblast: " + oblastName);
         log("URLs: " + urls.size());
+        log("Start index: " + startIndex);
         log("Folder: " + outDir.toAbsolutePath());
         log("=======================================");
 
@@ -234,7 +232,7 @@ public class YtDownloaderFxApp extends Application {
                 return summary;
             }
 
-            int index = i + 1;
+            int index = startIndex + i;
             String url = urls.get(i);
 
             Path mp3File = outDir.resolve(index + ".mp3");
@@ -319,6 +317,35 @@ public class YtDownloaderFxApp extends Application {
         return exitCode;
     }
 
+    private int askStartIndex(String oblastName, int urlCount) {
+        int[] result = {1};
+        CountDownLatch latch = new CountDownLatch(1);
+
+        Platform.runLater(() -> {
+            TextInputDialog dialog = new TextInputDialog("1");
+            dialog.setTitle("Start index");
+            dialog.setHeaderText("Oblast: " + oblastName + " (" + urlCount + " pesama)");
+            dialog.setContentText("Od kog indexa imenujemo fajlove?");
+            dialog.showAndWait().ifPresent(val -> {
+                try {
+                    int v = Integer.parseInt(val.trim());
+                    if (v >= 1) {
+                        result[0] = v;
+                    }
+                } catch (NumberFormatException ignored) {
+                }
+            });
+            latch.countDown();
+        });
+
+        try {
+            latch.await();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+        return result[0];
+    }
+
     private void log(String msg) {
         ui(() -> {
             logArea.appendText(msg + "\n");
@@ -357,6 +384,18 @@ public class YtDownloaderFxApp extends Application {
 
     public static void main(String[] args) {
         launch(args);
+    }
+
+    private static class OblastJob {
+
+        String name;
+        List<String> urls;
+        int startIndex = 1;
+
+        OblastJob(String name, List<String> urls) {
+            this.name = name;
+            this.urls = urls;
+        }
     }
 
     private static class OblastSummary {
