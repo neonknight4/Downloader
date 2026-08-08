@@ -1,0 +1,61 @@
+name: Windows installer
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      - name: Install WiX Toolset 3
+        run: |
+          choco install wixtoolset -y --no-progress
+          echo "C:\Program Files (x86)\WiX Toolset v3.14\bin" >> $env:GITHUB_PATH
+
+      - name: Maven build
+        run: mvn -B clean package
+
+      - name: Download yt-dlp + ffmpeg
+        run: |
+          New-Item -ItemType Directory -Force -Path tools | Out-Null
+          Invoke-WebRequest -Uri https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe -OutFile tools\yt-dlp.exe
+          Invoke-WebRequest -Uri https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip -OutFile ffmpeg.zip
+          Expand-Archive ffmpeg.zip -DestinationPath ffmpeg-tmp
+          Copy-Item (Get-ChildItem ffmpeg-tmp -Recurse -Filter ffmpeg.exe  | Select-Object -First 1).FullName tools\
+          Copy-Item (Get-ChildItem ffmpeg-tmp -Recurse -Filter ffprobe.exe | Select-Object -First 1).FullName tools\
+
+      - name: jpackage
+        run: |
+          Copy-Item target\Downloader-1.0.jar target\libs\
+          jpackage `
+            --type exe `
+            --name "YouTube Downloader" `
+            --app-version 1.0 `
+            --icon installer\video-download.ico `
+            --module-path target\libs `
+            --module its.downloader/its.yt.downloader.YtDownloaderFxApp `
+            --input tools `
+            --dest dist `
+            --win-dir-chooser `
+            --win-menu `
+            --win-shortcut `
+            --vendor its
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: YouTube-Downloader-windows-installer
+          path: dist/*.exe

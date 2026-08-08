@@ -5,6 +5,7 @@ import javafx.application.Platform;
 import javafx.geometry.Insets;
 import javafx.scene.Scene;
 import javafx.scene.control.*;
+import javafx.scene.image.Image;
 import javafx.scene.layout.*;
 import javafx.stage.Stage;
 
@@ -21,14 +22,18 @@ import java.util.stream.Stream;
 
 public class YtDownloaderFxApp extends Application {
 
+    private static final boolean WINDOWS
+            = System.getProperty("os.name").toLowerCase().contains("win");
+
     private static final String YT_DLP
-            = System.getProperty("os.name").toLowerCase().contains("win")
-            ? "yt-dlp.exe"
+            = WINDOWS
+            ? findWindowsTool("yt-dlp.exe")
             : "/home/mihailo-jankovic/.local/bin/yt-dlp";
 
     private final TextArea inputArea = new TextArea();
     private final TextArea logArea = new TextArea();
     private final Button btnDownload = new Button("Download MP3");
+    private final Button btnDownloadMp4 = new Button("Download MP4");
     private final Button btnStop = new Button("Stop");
     private final Label statusLabel = new Label("Ready.");
 
@@ -55,10 +60,11 @@ public class YtDownloaderFxApp extends Application {
 
         btnStop.setDisable(true);
 
-        btnDownload.setOnAction(e -> startDownload());
+        btnDownload.setOnAction(e -> startDownload(Format.MP3));
+        btnDownloadMp4.setOnAction(e -> startDownload(Format.MP4));
         btnStop.setOnAction(e -> stopDownload());
 
-        HBox buttons = new HBox(10, btnDownload, btnStop);
+        HBox buttons = new HBox(10, btnDownload, btnDownloadMp4, btnStop);
         VBox root = new VBox(10,
                 new Label("Input (oblast format):"),
                 inputArea,
@@ -71,12 +77,24 @@ public class YtDownloaderFxApp extends Application {
         root.setPadding(new Insets(12));
 
         Scene scene = new Scene(root, 900, 700);
-        stage.setTitle("YT MP3 Downloader (Oblasti)");
+        stage.setTitle("YouTube Downloader");
+        stage.getIcons().addAll(loadAppIcons());
         stage.setScene(scene);
         stage.show();
     }
 
-    private void startDownload() {
+    private List<Image> loadAppIcons() {
+        List<Image> icons = new ArrayList<>();
+        for (int size : new int[]{16, 24, 32, 48, 64, 128, 256}) {
+            var in = getClass().getResourceAsStream("icons/icon-" + size + ".png");
+            if (in != null) {
+                icons.add(new Image(in));
+            }
+        }
+        return icons;
+    }
+
+    private void startDownload(Format format) {
         startTimeMs = System.currentTimeMillis();
         String text = inputArea.getText();
 
@@ -87,14 +105,17 @@ public class YtDownloaderFxApp extends Application {
 
         stopRequested = false;
         btnDownload.setDisable(true);
+        btnDownloadMp4.setDisable(true);
         btnStop.setDisable(false);
         logArea.clear();
 
-        log("=== START " + LocalDateTime.now() + " ===");
+        log("=== START " + LocalDateTime.now() + " (" + format + ") ===");
+        log("yt-dlp: " + YT_DLP);
+        log("Output base: " + baseDownloadDir().toAbsolutePath());
 
         Thread worker = new Thread(() -> {
             try {
-                downloadFromText(text);
+                downloadFromText(text, format);
                 ui(() -> statusLabel.setText(stopRequested ? "Stopped." : "Done."));
             } catch (Exception ex) {
                 log("ERROR: " + ex.getMessage());
@@ -102,6 +123,7 @@ public class YtDownloaderFxApp extends Application {
             } finally {
                 ui(() -> {
                     btnDownload.setDisable(false);
+                    btnDownloadMp4.setDisable(false);
                     btnStop.setDisable(true);
                 });
             }
@@ -123,7 +145,7 @@ public class YtDownloaderFxApp extends Application {
         ui(() -> statusLabel.setText("Stop requested..."));
     }
 
-    private void downloadFromText(String text) throws Exception {
+    private void downloadFromText(String text, Format format) throws Exception {
 
         List<String> lines = List.of(text.split("\\R")); // \R = any line break
 
@@ -160,13 +182,16 @@ public class YtDownloaderFxApp extends Application {
             }
         }
 
-        // Faza 3: skidanje
+        // Faza 3: cist start - brisi sve oblasti od proslog puta
+        cleanPreviousDownloads(format);
+
+        // Faza 4: skidanje
         List<OblastSummary> allSummaries = new ArrayList<>();
         for (OblastJob job : jobs) {
             if (stopRequested) {
                 break;
             }
-            OblastSummary s = downloadOblastMp3(job.name, job.urls, job.startIndex);
+            OblastSummary s = downloadOblast(job.name, job.urls, job.startIndex, format);
             allSummaries.add(s);
         }
 
@@ -199,7 +224,7 @@ public class YtDownloaderFxApp extends Application {
         return line.matches("\\d+\\.oblast");
     }
 
-    private OblastSummary downloadOblastMp3(String oblastName, List<String> urls, int startIndex) throws Exception {
+    private OblastSummary downloadOblast(String oblastName, List<String> urls, int startIndex, Format format) throws Exception {
 
         OblastSummary summary = new OblastSummary(oblastName);
 
@@ -207,20 +232,16 @@ public class YtDownloaderFxApp extends Application {
             return summary;
         }
 
-        Path outDir = Path.of("downloads", oblastName);
+        Path base = baseDownloadDir();
+        Path outDir = format == Format.MP4
+                ? base.resolve("mp4").resolve(oblastName)
+                : base.resolve(oblastName);
 
-        // ako folder postoji, briši ga komplet
-        if (Files.exists(outDir)) {
-            log("Deleting existing folder: " + outDir.toAbsolutePath());
-            deleteDirectoryRecursively(outDir);
-        }
-
-        // napravi folder ponovo
         Files.createDirectories(outDir);
 
         log("");
         log("=======================================");
-        log("Oblast: " + oblastName);
+        log("Oblast: " + oblastName + " [" + format + "]");
         log("URLs: " + urls.size());
         log("Start index: " + startIndex);
         log("Folder: " + outDir.toAbsolutePath());
@@ -235,11 +256,11 @@ public class YtDownloaderFxApp extends Application {
             int index = startIndex + i;
             String url = urls.get(i);
 
-            Path mp3File = outDir.resolve(index + ".mp3");
+            Path outFile = outDir.resolve(index + "." + format.ext);
 
             ui(() -> statusLabel.setText("Downloading " + oblastName + " " + index + "/" + urls.size()));
 
-            String outputTemplate = outDir.toString() + "/" + index + ".%(ext)s";
+            String outputTemplate = outDir.resolve(index + ".%(ext)s").toString();
 
             List<String> command = new ArrayList<>();
             command.add(YT_DLP);
@@ -257,19 +278,27 @@ public class YtDownloaderFxApp extends Application {
             command.add("youtube:player_client=android");
 
             // IMPORTANT for Windows portable: find ffmpeg in same folder
-            if (System.getProperty("os.name").toLowerCase().contains("win")) {
+            if (WINDOWS) {
                 command.add("--ffmpeg-location");
-                command.add(".");
+                command.add(ffmpegDir());
             }
 
-            // mp3 extract
-            command.add("-x");
-            command.add("--audio-format");
-            command.add("mp3");
-            command.add("--audio-quality");
-            command.add("0");
+            if (format == Format.MP4) {
+                // video + audio, merged to mp4
+                command.add("-f");
+                command.add("bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best");
+                command.add("--merge-output-format");
+                command.add("mp4");
+            } else {
+                // mp3 extract
+                command.add("-x");
+                command.add("--audio-format");
+                command.add("mp3");
+                command.add("--audio-quality");
+                command.add("0");
+            }
 
-            // output name 1.mp3, 2.mp3 ...
+            // output name 1.mp3/1.mp4, 2... ...
             command.add("--output");
             command.add(outputTemplate);
 
@@ -278,7 +307,7 @@ public class YtDownloaderFxApp extends Application {
 
             int exit = run(command);
 
-            if (exit == 0 && Files.exists(mp3File)) {
+            if (exit == 0 && Files.exists(outFile)) {
                 summary.ok++;
             } else {
                 summary.fail++;
@@ -357,6 +386,106 @@ public class YtDownloaderFxApp extends Application {
         Platform.runLater(r);
     }
 
+    /**
+     * Folder gde app pise. Na Windowsu je app instaliran u Program Files (nije
+     * upisiv), pa idemo u user home.
+     */
+    private static Path baseDownloadDir() {
+        return WINDOWS
+                ? Path.of(System.getProperty("user.home"), "Downloads", "YouTube Downloader")
+                : Path.of("downloads");
+    }
+
+    /**
+     * Folder instalacije. Kod jpackage launcher setuje jpackage.app-path na
+     * putanju .exe-a; van instalacije padamo na folder jar-a.
+     */
+    private static Path appDir() {
+        String appPath = System.getProperty("jpackage.app-path");
+        if (appPath != null && !appPath.isBlank()) {
+            Path parent = Path.of(appPath).getParent();
+            if (parent != null) {
+                return parent;
+            }
+        }
+        try {
+            var cs = YtDownloaderFxApp.class.getProtectionDomain().getCodeSource();
+            if (cs != null && "file".equals(cs.getLocation().getProtocol())) {
+                Path p = Path.of(cs.getLocation().toURI());
+                return Files.isDirectory(p) ? p : p.getParent();
+            }
+        } catch (Exception ignored) {
+        }
+        return Path.of(".").toAbsolutePath();
+    }
+
+    /**
+     * Kandidati gde trazimo yt-dlp.exe / ffmpeg.exe: install root (tu ih
+     * jpackage --app-content stavlja), njegov "app" podfolder, pa navise, pa
+     * cwd.
+     */
+    private static List<Path> toolDirs() {
+        List<Path> dirs = new ArrayList<>();
+        Path d = appDir();
+        for (int i = 0; i < 3 && d != null; i++) {
+            dirs.add(d);
+            dirs.add(d.resolve("app"));
+            d = d.getParent();
+        }
+        dirs.add(Path.of(".").toAbsolutePath());
+        return dirs;
+    }
+
+    private static String findWindowsTool(String exeName) {
+        for (Path dir : toolDirs()) {
+            Path candidate = dir.resolve(exeName);
+            if (Files.isRegularFile(candidate)) {
+                return candidate.toString();
+            }
+        }
+        return exeName; // fallback: PATH
+    }
+
+    private static String ffmpegDir() {
+        for (Path dir : toolDirs()) {
+            if (Files.isRegularFile(dir.resolve("ffmpeg.exe"))) {
+                return dir.toString();
+            }
+        }
+        return ".";
+    }
+
+    /**
+     * Brise sve oblasti od prethodnih skidanja za dati format.
+     */
+    private void cleanPreviousDownloads(Format format) throws Exception {
+        Path base = baseDownloadDir();
+
+        if (format == Format.MP4) {
+            Path mp4Root = base.resolve("mp4");
+            if (Files.exists(mp4Root)) {
+                log("Cleaning: " + mp4Root.toAbsolutePath());
+                deleteDirectoryRecursively(mp4Root);
+            }
+            Files.createDirectories(mp4Root);
+            return;
+        }
+
+        // MP3: brisi samo N.oblast foldere u rootu, mp4 podfolder ostaje
+        Files.createDirectories(base);
+        try (Stream<Path> children = Files.list(base)) {
+            List<Path> oblasti = children
+                    .filter(Files::isDirectory)
+                    .filter(p -> isOblastHeader(p.getFileName().toString()))
+                    .toList();
+
+            for (Path p : oblasti) {
+                log("Cleaning: " + p.toAbsolutePath());
+                deleteDirectoryRecursively(p);
+            }
+        }
+    }
+
     private static void deleteDirectoryRecursively(Path dir) throws Exception {
         if (!Files.exists(dir)) {
             return;
@@ -384,6 +513,17 @@ public class YtDownloaderFxApp extends Application {
 
     public static void main(String[] args) {
         launch(args);
+    }
+
+    private enum Format {
+        MP3("mp3"),
+        MP4("mp4");
+
+        final String ext;
+
+        Format(String ext) {
+            this.ext = ext;
+        }
     }
 
     private static class OblastJob {
