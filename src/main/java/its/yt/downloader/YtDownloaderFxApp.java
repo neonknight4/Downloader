@@ -3,6 +3,7 @@ package its.yt.downloader;
 import javafx.application.Application;
 import javafx.application.Platform;
 import javafx.geometry.Insets;
+import javafx.geometry.Pos;
 import javafx.scene.Scene;
 import javafx.scene.control.*;
 import javafx.scene.image.Image;
@@ -35,6 +36,7 @@ public class YtDownloaderFxApp extends Application {
     private final Button btnDownload = new Button("Download MP3");
     private final Button btnDownloadMp4 = new Button("Download MP4");
     private final Button btnStop = new Button("Stop");
+    private final CheckBox chkOriginalNames = new CheckBox("Originalan naziv");
     private final Label statusLabel = new Label("Ready.");
 
     private volatile Process currentProcess;
@@ -64,7 +66,12 @@ public class YtDownloaderFxApp extends Application {
         btnDownloadMp4.setOnAction(e -> startDownload(Format.MP4));
         btnStop.setOnAction(e -> stopDownload());
 
-        HBox buttons = new HBox(10, btnDownload, btnDownloadMp4, btnStop);
+        chkOriginalNames.setTooltip(new Tooltip(
+                "Cekirano: fajlovi zadrzavaju originalan YouTube naziv.\n"
+                + "Necekirano: fajlovi se imenuju 1, 2, 3..."));
+
+        HBox buttons = new HBox(10, btnDownload, btnDownloadMp4, btnStop, chkOriginalNames);
+        buttons.setAlignment(Pos.CENTER_LEFT);
         VBox root = new VBox(10,
                 new Label("Input (oblast format):"),
                 inputArea,
@@ -103,19 +110,23 @@ public class YtDownloaderFxApp extends Application {
             return;
         }
 
+        boolean originalNames = chkOriginalNames.isSelected();
+
         stopRequested = false;
         btnDownload.setDisable(true);
         btnDownloadMp4.setDisable(true);
+        chkOriginalNames.setDisable(true);
         btnStop.setDisable(false);
         logArea.clear();
 
         log("=== START " + LocalDateTime.now() + " (" + format + ") ===");
         log("yt-dlp: " + YT_DLP);
         log("Output base: " + baseDownloadDir().toAbsolutePath());
+        log("Nazivi fajlova: " + (originalNames ? "originalni" : "1, 2, 3..."));
 
         Thread worker = new Thread(() -> {
             try {
-                downloadFromText(text, format);
+                downloadFromText(text, format, originalNames);
                 ui(() -> statusLabel.setText(stopRequested ? "Stopped." : "Done."));
             } catch (Exception ex) {
                 log("ERROR: " + ex.getMessage());
@@ -124,6 +135,7 @@ public class YtDownloaderFxApp extends Application {
                 ui(() -> {
                     btnDownload.setDisable(false);
                     btnDownloadMp4.setDisable(false);
+                    chkOriginalNames.setDisable(false);
                     btnStop.setDisable(true);
                 });
             }
@@ -145,7 +157,7 @@ public class YtDownloaderFxApp extends Application {
         ui(() -> statusLabel.setText("Stop requested..."));
     }
 
-    private void downloadFromText(String text, Format format) throws Exception {
+    private void downloadFromText(String text, Format format, boolean originalNames) throws Exception {
 
         List<String> lines = List.of(text.split("\\R")); // \R = any line break
 
@@ -175,10 +187,13 @@ public class YtDownloaderFxApp extends Application {
             jobs.add(new OblastJob(currentOblast, currentUrls));
         }
 
-        // Faza 2: pitaj start index za oblasti < 8 pesama (pre skidanja)
-        for (OblastJob job : jobs) {
-            if (job.urls.size() < 8) {
-                job.startIndex = askStartIndex(job.name, job.urls.size());
+        // Faza 2: pitaj start index za oblasti < 8 pesama (pre skidanja).
+        // Kod originalnih naziva nema indexiranja, pa nema ni pitanja.
+        if (!originalNames) {
+            for (OblastJob job : jobs) {
+                if (job.urls.size() < 8) {
+                    job.startIndex = askStartIndex(job.name, job.urls.size());
+                }
             }
         }
 
@@ -191,7 +206,7 @@ public class YtDownloaderFxApp extends Application {
             if (stopRequested) {
                 break;
             }
-            OblastSummary s = downloadOblast(job.name, job.urls, job.startIndex, format);
+            OblastSummary s = downloadOblast(job.name, job.urls, job.startIndex, format, originalNames);
             allSummaries.add(s);
         }
 
@@ -224,7 +239,8 @@ public class YtDownloaderFxApp extends Application {
         return line.matches("\\d+\\.oblast");
     }
 
-    private OblastSummary downloadOblast(String oblastName, List<String> urls, int startIndex, Format format) throws Exception {
+    private OblastSummary downloadOblast(String oblastName, List<String> urls, int startIndex, Format format,
+            boolean originalNames) throws Exception {
 
         OblastSummary summary = new OblastSummary(oblastName);
 
@@ -243,7 +259,7 @@ public class YtDownloaderFxApp extends Application {
         log("=======================================");
         log("Oblast: " + oblastName + " [" + format + "]");
         log("URLs: " + urls.size());
-        log("Start index: " + startIndex);
+        log(originalNames ? "Naziv: originalan" : "Start index: " + startIndex);
         log("Folder: " + outDir.toAbsolutePath());
         log("=======================================");
 
@@ -254,13 +270,18 @@ public class YtDownloaderFxApp extends Application {
             }
 
             int index = startIndex + i;
+            int redniBroj = i + 1;
             String url = urls.get(i);
 
-            Path outFile = outDir.resolve(index + "." + format.ext);
+            // kod originalnih naziva ime fajla ne znamo unapred -> brojimo fajlove
+            Path outFile = originalNames ? null : outDir.resolve(index + "." + format.ext);
+            int filesBefore = originalNames ? countFiles(outDir, format) : 0;
 
-            ui(() -> statusLabel.setText("Downloading " + oblastName + " " + index + "/" + urls.size()));
+            ui(() -> statusLabel.setText("Downloading " + oblastName + " " + redniBroj + "/" + urls.size()));
 
-            String outputTemplate = outDir.resolve(index + ".%(ext)s").toString();
+            String outputTemplate = originalNames
+                    ? outDir.resolve("%(title)s.%(ext)s").toString()
+                    : outDir.resolve(index + ".%(ext)s").toString();
 
             List<String> command = new ArrayList<>();
             command.add(YT_DLP);
@@ -307,15 +328,32 @@ public class YtDownloaderFxApp extends Application {
 
             int exit = run(command);
 
-            if (exit == 0 && Files.exists(outFile)) {
+            boolean downloaded = originalNames
+                    ? countFiles(outDir, format) > filesBefore
+                    : Files.exists(outFile);
+
+            if (exit == 0 && downloaded) {
                 summary.ok++;
             } else {
                 summary.fail++;
-                summary.failedSongs.add(index + " -> " + url);
+                summary.failedSongs.add((originalNames ? redniBroj : index) + " -> " + url);
             }
         }
 
         return summary;
+    }
+
+    /**
+     * Broj gotovih fajlova datog formata u folderu (.part i slicni se ne
+     * racunaju).
+     */
+    private static int countFiles(Path dir, Format format) throws Exception {
+        try (Stream<Path> files = Files.list(dir)) {
+            return (int) files
+                    .filter(Files::isRegularFile)
+                    .filter(p -> p.getFileName().toString().toLowerCase().endsWith("." + format.ext))
+                    .count();
+        }
     }
 
     private int run(List<String> command) throws Exception {
@@ -456,51 +494,62 @@ public class YtDownloaderFxApp extends Application {
     }
 
     /**
-     * Brise sve oblasti od prethodnih skidanja za dati format.
+     * Brise sve fajlove datog formata od prethodnih skidanja (i nedovrsene
+     * .part fajlove), pa pokupi foldere koji su ostali prazni. Drugi format se
+     * ne dira.
      */
     private void cleanPreviousDownloads(Format format) throws Exception {
         Path base = baseDownloadDir();
-
-        if (format == Format.MP4) {
-            Path mp4Root = base.resolve("mp4");
-            if (Files.exists(mp4Root)) {
-                log("Cleaning: " + mp4Root.toAbsolutePath());
-                deleteDirectoryRecursively(mp4Root);
-            }
-            Files.createDirectories(mp4Root);
-            return;
-        }
-
-        // MP3: brisi samo N.oblast foldere u rootu, mp4 podfolder ostaje
         Files.createDirectories(base);
-        try (Stream<Path> children = Files.list(base)) {
-            List<Path> oblasti = children
-                    .filter(Files::isDirectory)
-                    .filter(p -> isOblastHeader(p.getFileName().toString()))
+
+        String ext = "." + format.ext;
+        int deletedFiles = 0;
+
+        try (Stream<Path> walk = Files.walk(base)) {
+            List<Path> victims = walk
+                    .filter(Files::isRegularFile)
+                    .filter(p -> {
+                        String name = p.getFileName().toString().toLowerCase();
+                        return name.endsWith(ext) || name.endsWith(ext + ".part");
+                    })
                     .toList();
 
-            for (Path p : oblasti) {
-                log("Cleaning: " + p.toAbsolutePath());
-                deleteDirectoryRecursively(p);
+            for (Path p : victims) {
+                Files.deleteIfExists(p);
+                deletedFiles++;
             }
         }
+
+        int deletedDirs = deleteEmptyDirs(base);
+
+        log("Cleaning " + format + " u " + base.toAbsolutePath()
+                + ": obrisano " + deletedFiles + " fajlova, " + deletedDirs + " foldera");
     }
 
-    private static void deleteDirectoryRecursively(Path dir) throws Exception {
-        if (!Files.exists(dir)) {
-            return;
+    /**
+     * Brise prazne podfoldere (najdublje prvo). Sam root ostaje.
+     */
+    private static int deleteEmptyDirs(Path root) throws Exception {
+        List<Path> dirs;
+        try (Stream<Path> walk = Files.walk(root)) {
+            dirs = walk
+                    .filter(Files::isDirectory)
+                    .filter(p -> !p.equals(root))
+                    .sorted(Comparator.reverseOrder())
+                    .toList();
         }
 
-        try (Stream<Path> walk = Files.walk(dir)) {
-            walk.sorted(Comparator.reverseOrder()) // prvo briše fajlove, pa folder
-                    .forEach(path -> {
-                        try {
-                            Files.deleteIfExists(path);
-                        } catch (Exception e) {
-                            throw new RuntimeException("Failed to delete: " + path + " -> " + e.getMessage(), e);
-                        }
-                    });
+        int deleted = 0;
+        for (Path dir : dirs) {
+            try (Stream<Path> children = Files.list(dir)) {
+                if (children.findAny().isPresent()) {
+                    continue;
+                }
+            }
+            Files.deleteIfExists(dir);
+            deleted++;
         }
+        return deleted;
     }
 
     private void alert(String title, String msg) {
