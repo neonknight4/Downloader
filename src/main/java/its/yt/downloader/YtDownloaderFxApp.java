@@ -2,19 +2,27 @@ package its.yt.downloader;
 
 import javafx.application.Application;
 import javafx.application.Platform;
+import javafx.collections.FXCollections;
+import javafx.collections.ObservableList;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Scene;
 import javafx.scene.control.*;
 import javafx.scene.image.Image;
+import javafx.scene.image.ImageView;
+import javafx.scene.input.Clipboard;
+import javafx.scene.input.ClipboardContent;
 import javafx.scene.layout.*;
 import javafx.stage.Stage;
 
+import java.awt.Desktop;
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.LocalDateTime;
+import java.time.LocalTime;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
@@ -31,17 +39,25 @@ public class YtDownloaderFxApp extends Application {
             ? findWindowsTool("yt-dlp.exe")
             : "/home/mihailo-jankovic/.local/bin/yt-dlp";
 
+    private static final int MAX_LOG_LINES = 5000;
+    private static final DateTimeFormatter LOG_TIME = DateTimeFormatter.ofPattern("HH:mm:ss");
+
     private final TextArea inputArea = new TextArea();
-    private final TextArea logArea = new TextArea();
+    private final ListView<String> logView = new ListView<>();
+    private final ObservableList<String> logLines = FXCollections.observableArrayList();
     private final Button btnDownload = new Button("Download MP3");
     private final Button btnDownloadMp4 = new Button("Download MP4");
     private final Button btnStop = new Button("Stop");
+    private final Button btnOpenFolder = new Button("Otvori folder");
     private final CheckBox chkOriginalNames = new CheckBox("Originalan naziv");
-    private final Label statusLabel = new Label("Ready.");
+    private final ProgressBar progressBar = new ProgressBar(0);
+    private final Label statusLabel = new Label("Spreman.");
 
     private volatile Process currentProcess;
     private volatile boolean stopRequested = false;
     private volatile long startTimeMs = 0;
+    private volatile int totalUrls = 0;
+    private volatile int doneUrls = 0;
 
     @Override
     public void start(Stage stage) {
@@ -56,38 +72,186 @@ public class YtDownloaderFxApp extends Application {
                 + "7.oblast\n\n"
                 + "8.oblast\n"
         );
+        inputArea.setPrefRowCount(10);
 
-        logArea.setEditable(false);
-        logArea.setWrapText(true);
+        VBox root = new VBox(12,
+                buildHeader(),
+                buildSection("LINKOVI PO OBLASTIMA", inputArea, false),
+                buildControls(),
+                buildProgress(),
+                buildSection("LOG", buildLogView(), true)
+        );
+        root.setPadding(new Insets(16));
 
+        Scene scene = new Scene(root, 940, 760);
+        scene.getStylesheets().add(getClass().getResource("style.css").toExternalForm());
+
+        stage.setTitle("YouTube Downloader");
+        stage.getIcons().addAll(loadAppIcons());
+        stage.setMinWidth(700);
+        stage.setMinHeight(520);
+        stage.setScene(scene);
+        stage.show();
+    }
+
+    private HBox buildHeader() {
+        ImageView logo = new ImageView();
+        var iconStream = getClass().getResourceAsStream("icons/icon-32.png");
+        if (iconStream != null) {
+            logo.setImage(new Image(iconStream));
+        }
+
+        Label title = new Label("YouTube Downloader");
+        title.getStyleClass().add("app-title");
+
+        Label subtitle = new Label("MP3 / MP4 po oblastima");
+        subtitle.getStyleClass().add("app-subtitle");
+
+        VBox texts = new VBox(1, title, subtitle);
+
+        HBox header = new HBox(12, logo, texts);
+        header.setAlignment(Pos.CENTER_LEFT);
+        header.getStyleClass().add("app-header");
+        return header;
+    }
+
+    /**
+     * Naslov sekcije + sadrzaj. grow=true znaci da sekcija jede visak visine
+     * pri resize-u.
+     */
+    private VBox buildSection(String title, Region content, boolean grow) {
+        Label label = new Label(title);
+        label.getStyleClass().add("section-label");
+
+        VBox box = new VBox(5, label, content);
+        if (grow) {
+            VBox.setVgrow(box, Priority.ALWAYS);
+            VBox.setVgrow(content, Priority.ALWAYS);
+        }
+        return box;
+    }
+
+    private HBox buildControls() {
+        btnDownload.getStyleClass().add("button-primary");
+        btnDownloadMp4.getStyleClass().add("button-primary");
+        btnStop.getStyleClass().add("button-stop");
         btnStop.setDisable(true);
 
         btnDownload.setOnAction(e -> startDownload(Format.MP3));
         btnDownloadMp4.setOnAction(e -> startDownload(Format.MP4));
         btnStop.setOnAction(e -> stopDownload());
+        btnOpenFolder.setOnAction(e -> openDownloadsFolder());
 
         chkOriginalNames.setTooltip(new Tooltip(
                 "Cekirano: fajlovi zadrzavaju originalan YouTube naziv.\n"
                 + "Necekirano: fajlovi se imenuju 1, 2, 3..."));
 
-        HBox buttons = new HBox(10, btnDownload, btnDownloadMp4, btnStop, chkOriginalNames);
-        buttons.setAlignment(Pos.CENTER_LEFT);
-        VBox root = new VBox(10,
-                new Label("Input (oblast format):"),
-                inputArea,
-                buttons,
-                statusLabel,
-                new Label("Log:"),
-                logArea
-        );
+        Region spacer = new Region();
+        HBox.setHgrow(spacer, Priority.ALWAYS);
 
-        root.setPadding(new Insets(12));
+        HBox controls = new HBox(10,
+                btnDownload, btnDownloadMp4, btnStop, chkOriginalNames, spacer, btnOpenFolder);
+        controls.setAlignment(Pos.CENTER_LEFT);
+        return controls;
+    }
 
-        Scene scene = new Scene(root, 900, 700);
-        stage.setTitle("YouTube Downloader");
-        stage.getIcons().addAll(loadAppIcons());
-        stage.setScene(scene);
-        stage.show();
+    private HBox buildProgress() {
+        progressBar.setMaxWidth(Double.MAX_VALUE);
+        HBox.setHgrow(progressBar, Priority.ALWAYS);
+
+        statusLabel.getStyleClass().add("status-label");
+        statusLabel.setMinWidth(260);
+
+        HBox row = new HBox(12, progressBar, statusLabel);
+        row.setAlignment(Pos.CENTER_LEFT);
+        return row;
+    }
+
+    private ListView<String> buildLogView() {
+        logView.setItems(logLines);
+        logView.getStyleClass().add("log-list");
+        logView.getSelectionModel().setSelectionMode(SelectionMode.MULTIPLE);
+        logView.setCellFactory(lv -> new LogCell());
+
+        MenuItem copySelected = new MenuItem("Kopiraj izabrano");
+        copySelected.setOnAction(e -> copyToClipboard(logView.getSelectionModel().getSelectedItems()));
+
+        MenuItem copyAll = new MenuItem("Kopiraj ceo log");
+        copyAll.setOnAction(e -> copyToClipboard(logLines));
+
+        logView.setContextMenu(new ContextMenu(copySelected, copyAll));
+        return logView;
+    }
+
+    private void copyToClipboard(List<String> lines) {
+        if (lines.isEmpty()) {
+            return;
+        }
+        ClipboardContent content = new ClipboardContent();
+        content.putString(String.join("\n", lines));
+        Clipboard.getSystemClipboard().setContent(content);
+    }
+
+    private void openDownloadsFolder() {
+        Path dir = baseDownloadDir();
+        try {
+            Files.createDirectories(dir);
+        } catch (Exception e) {
+            log("ERROR: ne mogu da napravim folder: " + e.getMessage());
+            return;
+        }
+
+        Thread t = new Thread(() -> {
+            try {
+                Desktop.getDesktop().open(dir.toFile());
+            } catch (Exception e) {
+                log("ERROR: ne mogu da otvorim folder: " + e.getMessage());
+            }
+        });
+        t.setDaemon(true);
+        t.start();
+    }
+
+    /**
+     * Boji log liniju prema sadrzaju.
+     */
+    private static class LogCell extends ListCell<String> {
+
+        @Override
+        protected void updateItem(String item, boolean empty) {
+            super.updateItem(item, empty);
+            getStyleClass().removeAll("log-error", "log-ok", "log-cmd", "log-header");
+
+            if (empty || item == null) {
+                setText(null);
+                return;
+            }
+            setText(item);
+
+            String body = stripTimestamp(item);
+            String u = body.toUpperCase();
+
+            if (u.startsWith("OK=")) {
+                getStyleClass().add(u.contains("FAIL=0") ? "log-ok" : "log-error");
+            } else if (u.contains("ERROR") || u.contains("FAIL") || u.contains("WARNING")) {
+                getStyleClass().add("log-error");
+            } else if (u.contains("EXIT CODE: 0")) {
+                getStyleClass().add("log-ok");
+            } else if (body.startsWith("CMD:") || body.startsWith("[")) {
+                getStyleClass().add("log-cmd");
+            } else if (body.startsWith("=") || body.startsWith("#")) {
+                getStyleClass().add("log-header");
+            }
+        }
+
+        /**
+         * Skida "[HH:mm:ss] " prefiks da bi klasifikacija gledala pravi tekst.
+         */
+        private static String stripTimestamp(String s) {
+            boolean stamped = s.length() > 11
+                    && s.charAt(0) == '[' && s.charAt(3) == ':' && s.charAt(6) == ':' && s.charAt(9) == ']';
+            return stamped ? s.substring(11) : s;
+        }
     }
 
     private List<Image> loadAppIcons() {
@@ -113,11 +277,15 @@ public class YtDownloaderFxApp extends Application {
         boolean originalNames = chkOriginalNames.isSelected();
 
         stopRequested = false;
+        totalUrls = 0;
+        doneUrls = 0;
+        progressBar.setProgress(0);
+        statusLabel.setText("Priprema...");
         btnDownload.setDisable(true);
         btnDownloadMp4.setDisable(true);
         chkOriginalNames.setDisable(true);
         btnStop.setDisable(false);
-        logArea.clear();
+        logLines.clear();
 
         log("=== START " + LocalDateTime.now() + " (" + format + ") ===");
         log("yt-dlp: " + YT_DLP);
@@ -127,10 +295,15 @@ public class YtDownloaderFxApp extends Application {
         Thread worker = new Thread(() -> {
             try {
                 downloadFromText(text, format, originalNames);
-                ui(() -> statusLabel.setText(stopRequested ? "Stopped." : "Done."));
+                ui(() -> {
+                    if (!stopRequested) {
+                        progressBar.setProgress(1);
+                    }
+                    statusLabel.setText(stopRequested ? "Zaustavljeno." : "Gotovo.");
+                });
             } catch (Exception ex) {
                 log("ERROR: " + ex.getMessage());
-                ui(() -> statusLabel.setText("Error."));
+                ui(() -> statusLabel.setText("Greska."));
             } finally {
                 ui(() -> {
                     btnDownload.setDisable(false);
@@ -154,7 +327,7 @@ public class YtDownloaderFxApp extends Application {
             p.destroy();
         }
 
-        ui(() -> statusLabel.setText("Stop requested..."));
+        ui(() -> statusLabel.setText("Zaustavljanje..."));
     }
 
     private void downloadFromText(String text, Format format, boolean originalNames) throws Exception {
@@ -196,6 +369,9 @@ public class YtDownloaderFxApp extends Application {
                 }
             }
         }
+
+        totalUrls = jobs.stream().mapToInt(j -> j.urls.size()).sum();
+        doneUrls = 0;
 
         // Faza 3: cist start - brisi sve oblasti od proslog puta
         cleanPreviousDownloads(format);
@@ -277,7 +453,8 @@ public class YtDownloaderFxApp extends Application {
             Path outFile = originalNames ? null : outDir.resolve(index + "." + format.ext);
             int filesBefore = originalNames ? countFiles(outDir, format) : 0;
 
-            ui(() -> statusLabel.setText("Downloading " + oblastName + " " + redniBroj + "/" + urls.size()));
+            updateProgress(oblastName + "  " + redniBroj + "/" + urls.size()
+                    + "   (ukupno " + doneUrls + "/" + totalUrls + ")");
 
             String outputTemplate = originalNames
                     ? outDir.resolve("%(title)s.%(ext)s").toString()
@@ -338,6 +515,10 @@ public class YtDownloaderFxApp extends Application {
                 summary.fail++;
                 summary.failedSongs.add((originalNames ? redniBroj : index) + " -> " + url);
             }
+
+            doneUrls++;
+            updateProgress(oblastName + "  " + redniBroj + "/" + urls.size()
+                    + "   (ukupno " + doneUrls + "/" + totalUrls + ")");
         }
 
         return summary;
@@ -414,9 +595,25 @@ public class YtDownloaderFxApp extends Application {
     }
 
     private void log(String msg) {
+        String line = msg.isEmpty()
+                ? ""
+                : "[" + LocalTime.now().format(LOG_TIME) + "] " + msg;
+
         ui(() -> {
-            logArea.appendText(msg + "\n");
-            logArea.positionCaret(logArea.getText().length());
+            logLines.add(line);
+            if (logLines.size() > MAX_LOG_LINES) {
+                logLines.remove(0, logLines.size() - MAX_LOG_LINES);
+            }
+            logView.scrollTo(logLines.size() - 1);
+        });
+    }
+
+    private void updateProgress(String status) {
+        int done = doneUrls;
+        int total = totalUrls;
+        ui(() -> {
+            progressBar.setProgress(total <= 0 ? 0 : (double) done / total);
+            statusLabel.setText(status);
         });
     }
 

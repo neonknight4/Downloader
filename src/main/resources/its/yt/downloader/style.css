@@ -1,0 +1,191 @@
+/* YouTube Downloader - dark theme, red accent */
+
+.root {
+    -fx-base: #22222a;
+    -fx-background: #16161b;
+    -fx-control-inner-background: #1c1c22;
+    -fx-control-inner-background-alt: #1c1c22;
+    -fx-accent: #e02f2f;
+    -fx-focus-color: #e02f2f;
+    -fx-faint-focus-color: #e02f2f22;
+    -fx-text-background-color: #e6e6ea;
+    -fx-font-family: "Segoe UI", "Inter", "DejaVu Sans", sans-serif;
+    -fx-font-size: 13px;
+}
+
+.app-header {
+    -fx-padding: 0 0 4 0;
+}
+
+.app-title {
+    -fx-font-size: 19px;
+    -fx-font-weight: bold;
+    -fx-text-fill: #f2f2f5;
+}
+
+.app-subtitle {
+    -fx-text-fill: #8a8a96;
+    -fx-font-size: 12px;
+}
+
+.section-label {
+    -fx-text-fill: #9a9aa6;
+    -fx-font-size: 11px;
+    -fx-font-weight: bold;
+}
+
+.text-area {
+    -fx-background-color: #2a2a33;
+    -fx-background-radius: 8;
+    -fx-border-color: #33333d;
+    -fx-border-radius: 8;
+    -fx-text-fill: #e6e6ea;
+    -fx-highlight-fill: #e02f2f66;
+}
+
+.text-area .content {
+    -fx-background-color: #1c1c22;
+    -fx-background-radius: 7;
+}
+
+.text-area .scroll-pane,
+.text-area .scroll-pane .viewport {
+    -fx-background-color: transparent;
+}
+
+.button {
+    -fx-background-radius: 7;
+    -fx-padding: 7 16 7 16;
+    -fx-cursor: hand;
+    -fx-text-fill: #e6e6ea;
+    -fx-background-color: #32323d;
+}
+
+.button:hover {
+    -fx-background-color: #3c3c48;
+}
+
+.button:disabled {
+    -fx-opacity: 0.4;
+    -fx-cursor: default;
+}
+
+.button-primary {
+    -fx-background-color: #e02f2f;
+    -fx-text-fill: white;
+    -fx-font-weight: bold;
+}
+
+.button-primary:hover {
+    -fx-background-color: #f04343;
+}
+
+.button-stop {
+    -fx-background-color: #32323d;
+    -fx-text-fill: #ff8f8f;
+}
+
+.button-stop:hover {
+    -fx-background-color: #4a2b2b;
+}
+
+.check-box {
+    -fx-text-fill: #cfcfd8;
+}
+
+.check-box .box {
+    -fx-background-color: #2a2a33;
+    -fx-background-radius: 4;
+    -fx-border-color: #45454f;
+    -fx-border-radius: 4;
+}
+
+.check-box:selected .box {
+    -fx-background-color: #e02f2f;
+    -fx-border-color: #e02f2f;
+}
+
+.check-box:selected .mark {
+    -fx-background-color: white;
+}
+
+.progress-bar {
+    -fx-accent: #e02f2f;
+}
+
+.progress-bar > .track {
+    -fx-background-color: #2a2a33;
+    -fx-background-radius: 6;
+}
+
+.progress-bar > .bar {
+    -fx-background-radius: 6;
+    -fx-padding: 5;
+}
+
+.status-label {
+    -fx-text-fill: #cfcfd8;
+}
+
+/* --- log --- */
+.log-list {
+    -fx-background-color: #131318;
+    -fx-background-radius: 8;
+    -fx-border-color: #2a2a33;
+    -fx-border-radius: 8;
+    -fx-padding: 4;
+}
+
+.log-list .list-cell {
+    -fx-background-color: transparent;
+    -fx-padding: 1 6 1 6;
+    -fx-font-family: "Consolas", "JetBrains Mono", "DejaVu Sans Mono", monospace;
+    -fx-font-size: 12px;
+    -fx-text-fill: #c8c8d2;
+}
+
+.log-list .list-cell:filled:selected {
+    -fx-background-color: #e02f2f33;
+}
+
+.log-list .list-cell.log-error {
+    -fx-text-fill: #ff6b6b;
+}
+
+.log-list .list-cell.log-ok {
+    -fx-text-fill: #5ad48a;
+}
+
+.log-list .list-cell.log-cmd {
+    -fx-text-fill: #6e6e7c;
+}
+
+.log-list .list-cell.log-header {
+    -fx-text-fill: #ffb454;
+    -fx-font-weight: bold;
+}
+
+.scroll-bar {
+    -fx-background-color: transparent;
+}
+
+.scroll-bar .thumb {
+    -fx-background-color: #3d3d49;
+    -fx-background-radius: 6;
+}
+
+.scroll-bar .thumb:hover {
+    -fx-background-color: #4d4d5b;
+}
+
+.scroll-bar .increment-button,
+.scroll-bar .decrement-button,
+.scroll-bar .increment-arrow,
+.scroll-bar .decrement-arrow {
+    -fx-background-color: transparent;
+    -fx-padding: 0;
+}
+
+.separator .line {
+    -fx-border-color: #2a2a33;
+}
